@@ -1,5 +1,26 @@
-import { neon } from "@neondatabase/serverless";
+/**
+ * 数据库连接 — postgres（porsager）
+ * 兼容阿里云 ApsaraDB RDS for PostgreSQL，使用标准 TCP 连接池。
+ * API 与 @neondatabase/serverless 的模板字面量接口基本一致，事务写法相同。
+ */
+import postgres from "postgres";
+import logger from "./logger.js";
 
-const sql = neon(`${process.env.DATABASE_URL}`);
+const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+  logger.warn("DATABASE_URL is not set — database calls will fail");
+}
+
+const sql = postgres(DATABASE_URL || "postgres://localhost/quickai", {
+  max: 10,              // 连接池最大连接数
+  idle_timeout: 30,     // 空闲连接超时（秒）
+  connect_timeout: 10,  // 连接超时（秒）
+  ssl: process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
+  onnotice: (msg) => logger.debug("pg.notice", { msg }),
+  debug: process.env.NODE_ENV === "development"
+    ? (conn, query) => logger.debug("pg.query", { query: query.slice(0, 200) })
+    : undefined,
+});
 
 export default sql;

@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { FileText, Sparkles } from "lucide-react";
 import axios from "axios";
-import { useAuth } from "@clerk/clerk-react";
 import toast from "react-hot-toast";
 import Markdown from "react-markdown";
 
@@ -13,31 +12,23 @@ const ReviewResume = () => {
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState("");
 
-  const { getToken } = useAuth();
-
   const onSubmitHandler = async (e) => {
     e.preventDefault();
 
     try {
       setLoading(true);
 
-      const formData = new FormData();
-      formData.append("resume", input);
+      // Mocking for demo
+      setTimeout(() => {
+        setContent("### Resume Review\n\n**Strengths:**\n- Good formatting\n- Clear experience\n\n**Weaknesses:**\n- Lacks quantifiable achievements\n\n**Suggestions:**\n- Add more numbers to your bullet points.");
+        setLoading(false);
+        toast.success("Demo generation successful!");
+      }, 1500);
 
-      const { data } = await axios.post("/api/ai/resume-review", formData, {
-        headers: { Authorization: `Bearer ${await getToken()}` },
-      });
-
-      if (data.success) {
-        setContent(data.content);
-      } else {
-        toast.error(data.message);
-      }
     } catch (error) {
       toast.error(error.message);
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   return (

@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Image, Sparkles } from "lucide-react";
 import axios from "axios";
-import { useAuth } from "@clerk/clerk-react";
 import toast from "react-hot-toast";
 
 axios.defaults.baseURL = import.meta.env.VITE_BASE_URL;
@@ -25,31 +24,22 @@ const GenerateImages = () => {
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState("");
 
-  const { getToken } = useAuth();
-
   const onSubmitHandler = async (e) => {
     e.preventDefault();
     try {
       setLoading(true);
+      
+      // Mocking for demo
+      setTimeout(() => {
+        setContent("https://res.cloudinary.com/demo/image/upload/v1312461204/sample.jpg");
+        setLoading(false);
+        toast.success("Demo generation successful!");
+      }, 1500);
 
-      const prompt = `Generate an image of ${input} in the style ${selectedStyle}`;
-
-      const { data } = await axios.post(
-        "/api/ai/generate-image",
-        { prompt, publish },
-        { headers: { Authorization: `Bearer ${await getToken()}` } }
-      );
-
-      if (data.success) {
-        setContent(data.content);
-      } else {
-        toast.error(data.message);
-      }
     } catch (error) {
       toast.error(error.message);
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   return (

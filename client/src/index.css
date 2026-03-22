@@ -7,7 +7,61 @@
 }
 
 @theme {
-  --color-primary: #5044e5;
+  --color-primary: #6d5efc;
+  --color-bg: #0b0f14;
+  --color-surface: #111827;
+  --color-surface-2: #0f172a;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    min-height: 100vh;
+    background: var(--color-bg);
+    color: rgb(226 232 240);
+    letter-spacing: -0.01em;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-primary) 35%, transparent);
+  }
+}
+
+@layer components {
+  .qa-page {
+    @apply min-h-full p-6 sm:p-8;
+  }
+
+  .qa-card {
+    @apply rounded-xl border border-white/10 bg-white/5 shadow-[0_1px_0_rgba(255,255,255,0.06)] backdrop-blur;
+  }
+
+  .qa-card-hover {
+    @apply transition hover:bg-white/7 hover:border-white/15 hover:shadow-[0_8px_30px_rgba(0,0,0,0.35)];
+  }
+
+  .qa-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium border border-white/10 bg-white/5 text-slate-100 transition hover:bg-white/10 active:scale-[0.99];
+  }
+
+  .qa-btn-primary {
+    @apply border-transparent bg-primary text-white hover:bg-primary/90;
+  }
+
+  .qa-btn-ghost {
+    @apply bg-transparent hover:bg-white/6;
+  }
+
+  .qa-input {
+    @apply h-10 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-white/20 focus:ring-2 focus:ring-primary/30;
+  }
+
+  .qa-muted {
+    @apply text-slate-400;
+  }
 }
 
 .reset-tw, .reset-tw * {

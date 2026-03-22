@@ -1,7 +1,6 @@
 import { Edit, Sparkles } from "lucide-react";
 import { useState } from "react";
 import axios from "axios";
-import { useAuth } from "@clerk/clerk-react";
 import toast from "react-hot-toast";
 import Markdown from "react-markdown";
 
@@ -19,32 +18,22 @@ const WriteArticle = () => {
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState("");
 
-  const { getToken } = useAuth();
-
   const onSubmitHandler = async (e) => {
     e.preventDefault();
     try {
       setLoading(true);
-      const prompt = `Write an article about ${input} in ${selectedLength.text}`;
-
-      const { data } = await axios.post(
-        "/api/ai/generate-article",
-        { prompt, length: selectedLength.length },
-        {
-          headers: { Authorization: `Bearer ${await getToken()}` },
-        }
-      );
-
-      if (data.success) {
-        setContent(data.content);
-      } else {
-        toast.error(data.message);
-      }
+      
+      // Mocking for demo
+      setTimeout(() => {
+        setContent("This is a demo generated article. To use real generation, configure the backend and API keys.");
+        setLoading(false);
+        toast.success("Demo generation successful!");
+      }, 1500);
+      
     } catch (error) {
       toast.error(error.message);
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   return (

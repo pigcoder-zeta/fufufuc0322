@@ -2,63 +2,65 @@ import { assets } from "../assets/assets";
 
 const Footer = () => {
   return (
-    <footer className="px-6 md:px-16 lg:px-24 xl:px-32 pt-8 w-full text-gray-500 mt-20">
-      <div className="flex flex-col md:flex-row justify-between w-full gap-10 border-b border-gray-500/30 pb-6">
+    <footer className="mt-24 w-full px-6 pt-12 text-slate-400 md:px-16 lg:px-24 xl:px-32">
+      <div className="flex flex-col gap-10 border-b border-white/10 pb-10 md:flex-row md:justify-between">
         <div className="md:max-w-96">
-          <img className="h-9" src={assets.logo} alt="logo" />
-          <p className="mt-6 text-sm">
-            Experience the power of AI with QuickAi. <br /> Transform you
-            content creation with our suite of premium AI tools. Write articles,
-            generate images, and enhance your workflow.
+          <div className="inline-flex rounded-md bg-white/90 px-2 py-1">
+            <img className="h-8" src={assets.logo} alt="logo" />
+          </div>
+          <p className="mt-5 text-sm leading-6">
+            面向电商与营销场景的 AI 资产生成平台。快速生成商品主图与推广视频，
+            一键导出可直接用于投放的素材。
           </p>
+          {/* 商务联系 */}
+          <div className="mt-6 space-y-2 text-sm">
+            <p className="font-semibold text-slate-300">商务合作 / 定制需求</p>
+            <p>
+              邮件：{" "}
+              <a href="mailto:business@quickai.example.com" className="hover:text-slate-200 underline-offset-2 hover:underline">
+                business@quickai.example.com
+              </a>
+            </p>
+            <p>
+              Telegram：{" "}
+              <a href="https://t.me/quickai_support" target="_blank" rel="noreferrer" className="hover:text-slate-200 underline-offset-2 hover:underline">
+                @quickai_support
+              </a>
+            </p>
+          </div>
         </div>
-        <div className="flex-1 flex items-start md:justify-end gap-20">
+
+        <div className="flex flex-1 items-start gap-14 md:justify-end">
           <div>
-            <h2 className="font-semibold mb-5 text-gray-800">Company</h2>
-            <ul className="text-sm space-y-2">
-              <li>
-                <a href="#">Home</a>
-              </li>
-              <li>
-                <a href="#">About us</a>
-              </li>
-              <li>
-                <a href="#">Contact us</a>
-              </li>
-              <li>
-                <a href="#">Privacy policy</a>
-              </li>
+            <h2 className="mb-5 text-sm font-semibold text-slate-200">产品</h2>
+            <ul className="space-y-2 text-sm">
+              <li><a className="hover:text-slate-200" href="/">首页</a></li>
+              <li><a className="hover:text-slate-200" href="/ai">工作台</a></li>
+              <li><a className="hover:text-slate-200" href="/ai/billing">积分充值</a></li>
             </ul>
           </div>
           <div>
-            <h2 className="font-semibold text-gray-800 mb-5">
-              Subscribe to our newsletter
-            </h2>
-            <div className="text-sm space-y-2">
-              <p>
-                The latest news, articles, and resources, sent to your inbox
-                weekly.
-              </p>
-              <div className="flex items-center gap-2 pt-4">
-                <input
-                  className="border border-gray-500/30 placeholder-gray-500 focus:ring-2 ring-indigo-600 outline-none w-full max-w-64 h-9 rounded px-2"
-                  type="email"
-                  placeholder="Enter your email"
-                />
-                <button className="bg-primary w-24 h-9 text-white rounded cursor-pointer">
-                  Subscribe
-                </button>
-              </div>
-            </div>
+            <h2 className="mb-5 text-sm font-semibold text-slate-200">支持</h2>
+            <ul className="space-y-2 text-sm">
+              <li>
+                <a
+                  className="hover:text-slate-200"
+                  href="https://t.me/quickai_support"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  联系我们
+                </a>
+              </li>
+              <li><a className="hover:text-slate-200" href="#">隐私政策</a></li>
+              <li><a className="hover:text-slate-200" href="#">服务条款</a></li>
+            </ul>
           </div>
         </div>
       </div>
-      <p className="pt-4 text-center text-xs md:text-sm pb-5">
-        Copyright 2025 ©{" "}
-        <a target="_blank" href="https://elyse502.github.io/Elysee-Portfolio">
-          ElyséeDev
-        </a>
-        . All Right Reserved.
+
+      <p className="pb-8 pt-6 text-center text-xs md:text-sm">
+        Copyright 2026 © QuickAI MVP · 生成记录保留 30 天
       </p>
     </footer>
   );
