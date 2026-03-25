@@ -146,22 +146,59 @@ export const confirmOrder = async (req, res) => {
       }
     }
 
-    const [order] = await sql`
-      SELECT * FROM point_orders WHERE order_no = ${orderNo} AND user_id = ${userId}
-    `;
+    // Bug 8 修复：在事务内用 FOR UPDATE 锁订单行，防止并发双倍积分
+    const result = await sql.begin(async (tx) => {
+      const [order] = await tx`
+        SELECT * FROM point_orders
+        WHERE order_no = ${orderNo} AND user_id = ${userId}
+        FOR UPDATE
+      `;
 
-    if (!order) {
+      if (!order) return { notFound: true };
+
+      if (order.status === "paid") return { alreadyPaid: true, order };
+
+      if (order.status !== "pending") return { badStatus: order.status };
+
+      // 发放积分（rechargePoints 内部也有幂等门卫）
+      const idempotencyKey = `recharge:order:${orderNo}`;
+      await rechargePoints({
+        userId,
+        amount: order.total_points,
+        sourceType: "order",
+        sourceId: String(order.id),
+        idempotencyKey,
+        note: `充值 ${order.package_name}`,
+        tx,
+      });
+
+      await tx`
+        UPDATE point_orders
+        SET status = 'paid', paid_at = NOW(), confirmed_at = NOW(),
+            confirm_request_id = ${confirmRequestId || null}
+        WHERE order_no = ${orderNo}
+      `;
+
+      return { ok: true, order };
+    });
+
+    if (result.notFound) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
+    if (result.badStatus) {
+      return res.status(400).json({ success: false, message: `Order status is ${result.badStatus}, cannot confirm` });
+    }
 
-    if (order.status === "paid") {
-      const account = await getAccountInfo(userId);
+    const account = await getAccountInfo(userId);
+    const grantedPoints = result.order.total_points;
+
+    if (result.alreadyPaid) {
       return res.json({
         success: true,
         data: {
-          order_no: order.order_no,
+          order_no: result.order.order_no,
           status: "paid",
-          granted_points: order.total_points,
+          granted_points: grantedPoints,
           balance_points: account?.balance_points ?? 0,
           held_points: account?.held_points ?? 0,
           available_points: Number(account?.available_points ?? 0),
@@ -169,39 +206,14 @@ export const confirmOrder = async (req, res) => {
       });
     }
 
-    if (order.status !== "pending") {
-      return res.status(400).json({ success: false, message: `Order status is ${order.status}, cannot confirm` });
-    }
-
-    // 发放积分
-    const idempotencyKey = `recharge:order:${orderNo}`;
-    const { newBalance } = await rechargePoints({
-      userId,
-      amount: order.total_points,
-      sourceType: "order",
-      sourceId: String(order.id),
-      idempotencyKey,
-      note: `充值 ${order.package_name}`,
-    });
-
-    // 更新订单状态
-    await sql`
-      UPDATE point_orders
-      SET status = 'paid', paid_at = NOW(), confirmed_at = NOW(),
-          confirm_request_id = ${confirmRequestId || null}
-      WHERE order_no = ${orderNo}
-    `;
-
-    const account = await getAccountInfo(userId);
-
-    logger.info("confirmOrder.success", { userId, orderNo, grantedPoints: order.total_points });
+    logger.info("confirmOrder.success", { userId, orderNo, grantedPoints });
 
     res.json({
       success: true,
       data: {
         order_no: orderNo,
         status: "paid",
-        granted_points: order.total_points,
+        granted_points: grantedPoints,
         balance_points: account?.balance_points ?? 0,
         held_points: account?.held_points ?? 0,
         available_points: Number(account?.available_points ?? 0),

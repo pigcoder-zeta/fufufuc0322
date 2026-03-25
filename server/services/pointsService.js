@@ -1,6 +1,10 @@
 /**
  * 积分事务服务
- * 所有积分变更都在此处完成，保证原子性、幂等性和审计一致性。
+ *
+ * 幂等保证策略（修复 Bug 1）：
+ *   事务内先查 point_ledger 是否已存在该 idempotency_key，
+ *   存在则直接返回（账户不再变动）；
+ *   不存在则先写流水、再改账户，保证"账本一条 ↔ 账户改一次"。
  *
  * 账本语义：
  *   reserve : change_points = 0,  held_points_change = +N  （预占）
@@ -12,51 +16,51 @@ import sql from "../configs/db.js";
 import logger from "../configs/logger.js";
 
 /**
- * 确保用户积分账户存在，不存在则创建。
- * 返回账户行（已加行级锁，必须在事务中调用）。
+ * 确保用户积分账户存在并加行锁（必须在事务中调用）。
  */
 export const ensureAccountTx = async (tx, userId) => {
-  let [account] = await tx`
+  // UPSERT 保证账户存在
+  await tx`
+    INSERT INTO user_point_accounts (user_id, balance_points, held_points)
+    VALUES (${userId}, 0, 0)
+    ON CONFLICT (user_id) DO NOTHING
+  `;
+
+  const [account] = await tx`
     SELECT * FROM user_point_accounts
     WHERE user_id = ${userId}
     FOR UPDATE
   `;
 
-  if (!account) {
-    [account] = await tx`
-      INSERT INTO user_point_accounts (user_id, balance_points, held_points)
-      VALUES (${userId}, 0, 0)
-      ON CONFLICT (user_id) DO UPDATE
-        SET user_id = EXCLUDED.user_id
-      RETURNING *
-    `;
-    // 再加锁
-    [account] = await tx`
-      SELECT * FROM user_point_accounts
-      WHERE user_id = ${userId}
-      FOR UPDATE
-    `;
-  }
-
   return account;
 };
 
-/**
- * 预占积分（reserve）
- * - 校验 available_points >= amount
- * - held_points += amount
- * - 写入流水
- */
-export const reservePoints = async ({
-  userId,
-  amount,
-  creationId,
-  idempotencyKey,
-  note,
-}) => {
+// ─── 幂等门卫：在事务锁内检查 idempotency_key ───────────────────────
+const checkLedgerIdempotency = async (tx, idempotencyKey) => {
+  const [existing] = await tx`
+    SELECT id, balance_after, held_after, change_points, held_points_change
+    FROM point_ledger
+    WHERE idempotency_key = ${idempotencyKey}
+  `;
+  return existing || null;
+};
+
+// ─────────────────────────────────────────────
+// reservePoints — 预占积分
+// ─────────────────────────────────────────────
+export const reservePoints = async ({ userId, amount, creationId, idempotencyKey, note }) => {
   return sql.begin(async (tx) => {
+    // 1. 锁定账户
     const account = await ensureAccountTx(tx, userId);
 
+    // 2. 幂等检查（在锁内）— 已存在直接返回，账户不动
+    const existing = await checkLedgerIdempotency(tx, idempotencyKey);
+    if (existing) {
+      logger.info("points.reserve.idempotent", { userId, idempotencyKey });
+      return { success: true, ledger: existing };
+    }
+
+    // 3. 校验可用积分
     const available = account.balance_points - account.held_points;
     if (available < amount) {
       throw Object.assign(new Error("Insufficient points"), {
@@ -68,12 +72,7 @@ export const reservePoints = async ({
 
     const newHeld = account.held_points + amount;
 
-    await tx`
-      UPDATE user_point_accounts
-      SET held_points = ${newHeld}, version = version + 1, updated_at = NOW()
-      WHERE user_id = ${userId}
-    `;
-
+    // 4. 先写流水（idempotency_key 唯一，若并发重入此处会报唯一冲突）
     const [ledger] = await tx`
       INSERT INTO point_ledger
         (user_id, entry_type, source_type, source_id, idempotency_key,
@@ -81,9 +80,14 @@ export const reservePoints = async ({
       VALUES
         (${userId}, 'reserve', 'creation', ${String(creationId)}, ${idempotencyKey},
          0, ${amount}, ${account.balance_points}, ${newHeld}, ${note || null})
-      ON CONFLICT (idempotency_key) DO UPDATE
-        SET idempotency_key = EXCLUDED.idempotency_key
       RETURNING *
+    `;
+
+    // 5. 再改账户（流水写成功才到这里）
+    await tx`
+      UPDATE user_point_accounts
+      SET held_points = ${newHeld}, version = version + 1, updated_at = NOW()
+      WHERE user_id = ${userId}
     `;
 
     logger.info("points.reserve", { userId, amount, creationId, ledgerId: ledger.id });
@@ -91,34 +95,25 @@ export const reservePoints = async ({
   });
 };
 
-/**
- * 结算扣减（charge）
- * - balance_points -= amount, held_points -= amount
- * - charge_status → charged
- */
-export const chargePoints = async ({
-  userId,
-  amount,
-  creationId,
-  idempotencyKey,
-  note,
-}) => {
+// ─────────────────────────────────────────────
+// chargePoints — 结算扣减
+// ─────────────────────────────────────────────
+export const chargePoints = async ({ userId, amount, creationId, idempotencyKey, note }) => {
   return sql.begin(async (tx) => {
     const account = await ensureAccountTx(tx, userId);
 
+    const existing = await checkLedgerIdempotency(tx, idempotencyKey);
+    if (existing) {
+      logger.info("points.charge.idempotent", { userId, idempotencyKey });
+      return { success: true, ledger: existing };
+    }
+
     const newBalance = account.balance_points - amount;
-    const newHeld = account.held_points - amount;
+    const newHeld    = account.held_points    - amount;
 
     if (newBalance < 0 || newHeld < 0) {
       throw new Error("Account balance inconsistency on charge");
     }
-
-    await tx`
-      UPDATE user_point_accounts
-      SET balance_points = ${newBalance}, held_points = ${newHeld},
-          version = version + 1, updated_at = NOW()
-      WHERE user_id = ${userId}
-    `;
 
     const [ledger] = await tx`
       INSERT INTO point_ledger
@@ -127,9 +122,14 @@ export const chargePoints = async ({
       VALUES
         (${userId}, 'charge', 'creation', ${String(creationId)}, ${idempotencyKey},
          ${-amount}, ${-amount}, ${newBalance}, ${newHeld}, ${note || null})
-      ON CONFLICT (idempotency_key) DO UPDATE
-        SET idempotency_key = EXCLUDED.idempotency_key
       RETURNING *
+    `;
+
+    await tx`
+      UPDATE user_point_accounts
+      SET balance_points = ${newBalance}, held_points = ${newHeld},
+          version = version + 1, updated_at = NOW()
+      WHERE user_id = ${userId}
     `;
 
     logger.info("points.charge", { userId, amount, creationId, ledgerId: ledger.id });
@@ -137,29 +137,26 @@ export const chargePoints = async ({
   });
 };
 
-/**
- * 返还预占（release）
- * - held_points -= amount
- * - balance_points 不变
- * - charge_status → released
- */
-export const releasePoints = async ({
-  userId,
-  amount,
-  creationId,
-  idempotencyKey,
-  note,
-}) => {
+// ─────────────────────────────────────────────
+// releasePoints — 返还预占
+// ─────────────────────────────────────────────
+export const releasePoints = async ({ userId, amount, creationId, idempotencyKey, note }) => {
   return sql.begin(async (tx) => {
     const account = await ensureAccountTx(tx, userId);
 
-    const newHeld = Math.max(0, account.held_points - amount);
+    const existing = await checkLedgerIdempotency(tx, idempotencyKey);
+    if (existing) {
+      logger.info("points.release.idempotent", { userId, idempotencyKey });
+      return { success: true, ledger: existing };
+    }
 
-    await tx`
-      UPDATE user_point_accounts
-      SET held_points = ${newHeld}, version = version + 1, updated_at = NOW()
-      WHERE user_id = ${userId}
-    `;
+    // amount = 0 时不写流水（无预占可释放），直接幂等返回
+    if (amount <= 0) {
+      logger.info("points.release.skip", { userId, reason: "amount=0" });
+      return { success: true, ledger: null };
+    }
+
+    const newHeld = Math.max(0, account.held_points - amount);
 
     const [ledger] = await tx`
       INSERT INTO point_ledger
@@ -168,9 +165,13 @@ export const releasePoints = async ({
       VALUES
         (${userId}, 'release', 'creation', ${String(creationId)}, ${idempotencyKey},
          0, ${-amount}, ${account.balance_points}, ${newHeld}, ${note || null})
-      ON CONFLICT (idempotency_key) DO UPDATE
-        SET idempotency_key = EXCLUDED.idempotency_key
       RETURNING *
+    `;
+
+    await tx`
+      UPDATE user_point_accounts
+      SET held_points = ${newHeld}, version = version + 1, updated_at = NOW()
+      WHERE user_id = ${userId}
     `;
 
     logger.info("points.release", { userId, amount, creationId, ledgerId: ledger.id });
@@ -178,29 +179,22 @@ export const releasePoints = async ({
   });
 };
 
-/**
- * 充值发放（recharge）
- * - balance_points += amount
- * - 写入 recharge 流水
- */
+// ─────────────────────────────────────────────
+// rechargePoints — 充值发放
+// ─────────────────────────────────────────────
 export const rechargePoints = async ({
-  userId,
-  amount,
-  sourceType,
-  sourceId,
-  idempotencyKey,
-  note,
-  tx: externalTx,
+  userId, amount, sourceType, sourceId, idempotencyKey, note, tx: externalTx,
 }) => {
   const run = async (tx) => {
     const account = await ensureAccountTx(tx, userId);
-    const newBalance = account.balance_points + amount;
 
-    await tx`
-      UPDATE user_point_accounts
-      SET balance_points = ${newBalance}, version = version + 1, updated_at = NOW()
-      WHERE user_id = ${userId}
-    `;
+    const existing = await checkLedgerIdempotency(tx, idempotencyKey);
+    if (existing) {
+      logger.info("points.recharge.idempotent", { userId, idempotencyKey });
+      return { success: true, ledger: existing, newBalance: existing.balance_after };
+    }
+
+    const newBalance = account.balance_points + amount;
 
     const [ledger] = await tx`
       INSERT INTO point_ledger
@@ -209,9 +203,13 @@ export const rechargePoints = async ({
       VALUES
         (${userId}, 'recharge', ${sourceType}, ${String(sourceId)}, ${idempotencyKey},
          ${amount}, 0, ${newBalance}, ${account.held_points}, ${note || null})
-      ON CONFLICT (idempotency_key) DO UPDATE
-        SET idempotency_key = EXCLUDED.idempotency_key
       RETURNING *
+    `;
+
+    await tx`
+      UPDATE user_point_accounts
+      SET balance_points = ${newBalance}, version = version + 1, updated_at = NOW()
+      WHERE user_id = ${userId}
     `;
 
     logger.info("points.recharge", { userId, amount, sourceId, ledgerId: ledger.id });
@@ -221,15 +219,15 @@ export const rechargePoints = async ({
   return externalTx ? run(externalTx) : sql.begin(run);
 };
 
-/**
- * 根据场景/模型/时长/尺寸查询计费规则，返回 points_cost
- */
+// ─────────────────────────────────────────────
+// resolveCharge — 查询计费规则
+// ─────────────────────────────────────────────
 export const resolveCharge = async ({ outputType, provider, sceneKey, model, seconds, size }) => {
   const rules = await sql`
-    SELECT points_cost, priority FROM generation_charge_rules
+    SELECT points_cost FROM generation_charge_rules
     WHERE output_type = ${outputType}
-      AND provider = ${provider}
-      AND is_active = true
+      AND provider    = ${provider}
+      AND is_active   = true
       AND (scene_key = ${sceneKey} OR scene_key IS NULL)
       AND (model     = ${model}    OR model     IS NULL)
       AND (seconds   = ${seconds}  OR seconds   IS NULL)
@@ -245,9 +243,9 @@ export const resolveCharge = async ({ outputType, provider, sceneKey, model, sec
   return rules[0].points_cost;
 };
 
-/**
- * 获取用户账户信息（不加锁，用于只读展示）
- */
+// ─────────────────────────────────────────────
+// getAccountInfo — 只读展示
+// ─────────────────────────────────────────────
 export const getAccountInfo = async (userId) => {
   const [account] = await sql`
     SELECT balance_points, held_points,

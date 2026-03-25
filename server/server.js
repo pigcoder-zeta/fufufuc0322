@@ -11,6 +11,7 @@ import userRouter from "./routes/userRoutes.js";
 import pointsRouter from "./routes/pointsRoutes.js";
 import adminRouter from "./routes/adminRoutes.js";
 import { requireAuth } from "./middlewares/auth.js";
+import { requireAdmin } from "./middlewares/requireAdmin.js";
 import sql from "./configs/db.js";
 import logger from "./configs/logger.js";
 import { deleteObjects } from "./configs/oss.js";
@@ -48,24 +49,15 @@ app.use(rateLimit({
   message: { success: false, code: "RATE_LIMITED", message: "Too many requests." },
 }));
 
-// ── 生成接口专项限流 ─────────────────────────────
-const generateLimiter = rateLimit({
-  windowMs: 60 * 1000, max: 5,
-  standardHeaders: true, legacyHeaders: false,
-  message: { success: false, code: "RATE_LIMITED", message: "Max 5 generation requests per minute." },
-});
-
 // ── 健康检查 ─────────────────────────────────────
 app.get("/", (req, res) => res.json({ status: "ok", service: "QuickAI-MVP API" }));
 app.get("/health", (req, res) => res.json({ status: "ok", uptime: process.uptime() }));
 
-// ── 业务路由 ─────────────────────────────────────
+// ── 业务路由（生成接口限流已移至 aiRoutes.js 路由层）────────────────
 app.use("/api/ai", requireAuth(), aiRouter);
-app.use("/api/ai/generate-scene-image", generateLimiter);
-app.use("/api/ai/generate-sora-video", generateLimiter);
 app.use("/api/user", requireAuth(), userRouter);
 app.use("/api/points", requireAuth(), pointsRouter);
-app.use("/api/admin", requireAuth(), adminRouter);
+app.use("/api/admin", requireAuth(), requireAdmin(), adminRouter);
 
 // ── 全局错误处理 ─────────────────────────────────
 app.use((err, req, res, _next) => {

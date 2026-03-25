@@ -99,7 +99,8 @@ export const requireAuth = () => async (req, res, next) => {
       return res.status(401).json({ success: false, message: "Token missing sub claim" });
     }
 
-    req.auth = { userId };
+    req.auth        = { userId };
+    req.authPayload = payload;   // 供 requireAdmin 读取 roles claim
     return next();
   } catch (err) {
     logger.warn("auth.verify.failed", { error: err.message, ip: req.ip });

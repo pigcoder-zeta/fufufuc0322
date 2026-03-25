@@ -51,7 +51,10 @@ export const tryGrantBonusInTx = async (tx, account) => {
   const cycleEnd = new Date(cycleStart);
   cycleEnd.setMonth(cycleEnd.getMonth() + 1);
 
-  const idempotencyKey = `membership_grant:${userId}:${cycleStart.toISOString()}`;
+  // Bug 7 修复：幂等键格式对齐 spec
+  //   grant 行：membership_bonus:user:<userId>:cycle:<cycle_start_iso>
+  //   ledger 行：membership_grant:bonus:<grant.id>
+  const grantIdempotencyKey = `membership_bonus:user:${userId}:cycle:${cycleStart.toISOString()}`;
 
   // 插入月赠发放记录（ON CONFLICT → 幂等跳过）
   const [grant] = await tx`
@@ -60,7 +63,7 @@ export const tryGrantBonusInTx = async (tx, account) => {
        points_granted, idempotency_key, triggered_by)
     VALUES
       (${userId}, ${membership_tier}, ${cycleStart.toISOString()},
-       ${cycleEnd.toISOString()}, ${bonusPoints}, ${idempotencyKey}, 'system')
+       ${cycleEnd.toISOString()}, ${bonusPoints}, ${grantIdempotencyKey}, 'system')
     ON CONFLICT (user_id, cycle_start_at) DO NOTHING
     RETURNING id
   `;
@@ -70,13 +73,16 @@ export const tryGrantBonusInTx = async (tx, account) => {
     return { granted: false, pointsGranted: 0 };
   }
 
+  // ledger 用独立幂等键，格式：membership_grant:bonus:<grant.id>
+  const ledgerIdempotencyKey = `membership_grant:bonus:${grant.id}`;
+
   // 发放积分
   const { ledger } = await rechargePoints({
     userId,
     amount: bonusPoints,
     sourceType: "membership_bonus_grant",
     sourceId: String(grant.id),
-    idempotencyKey,
+    idempotencyKey: ledgerIdempotencyKey,
     note: `会员月赠积分 ${membership_tier} ${cycleStart.toISOString().slice(0, 7)}`,
     tx,
   });

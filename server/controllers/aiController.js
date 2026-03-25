@@ -11,8 +11,10 @@ import logger from "../configs/logger.js";
 // ─────────────────────────────────────────────
 export const getScenes = async (req, res) => {
   try {
+    // Bug 6 修复：target_provider 别名为 provider，对齐 API spec
     const templates = await sql`
-      SELECT pt.scene_key, pt.scene_name, pt.output_type, pt.target_provider,
+      SELECT pt.scene_key, pt.scene_name, pt.output_type,
+             pt.target_provider AS provider,
              pt.default_model, pt.default_seconds, pt.default_size,
              gcr.points_cost AS estimated_points
       FROM prompt_templates pt
@@ -65,17 +67,20 @@ export const estimatePoints = async (req, res) => {
       size: size || null,
     });
 
+    // Bug 6 修复：target_provider → provider，对齐 spec
     res.json({
       success: true,
       data: {
+        scene_key,
+        output_type,
         estimated_points,
         currency_unit: "points",
         rule_snapshot: {
           provider: template.target_provider,
           scene_key,
-          model: model || null,
+          model:   model   || null,
           seconds: seconds || null,
-          size: size || null,
+          size:    size    || null,
         },
       },
     });
@@ -226,8 +231,11 @@ export const generateSceneImage = async (req, res) => {
 
     if (creationId) {
       try {
+        // 从 creation 记录取出实际预占量，保证返还金额正确（Bug 2 修复）
+        const [rec] = await sql`SELECT points_reserved FROM creations WHERE id = ${creationId}`.catch(() => []);
+        const reservedAmt = rec?.points_reserved ?? 0;
         await releasePoints({
-          userId, amount: 0, creationId,
+          userId, amount: reservedAmt, creationId,
           idempotencyKey: `release:${idempotencyKey}`,
           note: "返还：图片生成失败",
         }).catch(() => {});
@@ -362,8 +370,11 @@ export const generateSoraVideo = async (req, res) => {
     logger.error("generateSoraVideo.error", { userId, creationId, error: err.message });
 
     if (creationId) {
+      // 从 creation 记录取出实际预占量（Bug 2 修复）
+      const [rec] = await sql`SELECT points_reserved FROM creations WHERE id = ${creationId}`.catch(() => []);
+      const reservedAmt = rec?.points_reserved ?? 0;
       await releasePoints({
-        userId, amount: 0, creationId,
+        userId, amount: reservedAmt, creationId,
         idempotencyKey: `release:${idempotencyKey}`,
         note: "返还：视频任务提交失败",
       }).catch(() => {});

@@ -11,8 +11,14 @@
 import axios from "axios";
 import logger from "../configs/logger.js";
 
-const SORA_API_KEY  = process.env.SORA_API_KEY  || "7c15e5bd8e3bc5d9ba8127986f6c7086debd6f9b4e5da25e789abc01a42278bd";
+// Bug 5 修复：删除硬编码 fallback，强制从环境变量读取。
+// 已泄露的 key 请立即在 aimh8.com 控制台轮换。
+const SORA_API_KEY  = process.env.SORA_API_KEY;
 const SORA_BASE_URL = process.env.SORA_BASE_URL || "https://www.aimh8.com/agent/openapi/fpbrowser2api";
+
+if (!SORA_API_KEY && process.env.NODE_ENV === "production") {
+  logger.error("SORA_API_KEY is not set — video generation will fail in production");
+}
 
 const soraClient = axios.create({
   baseURL: SORA_BASE_URL,
@@ -25,6 +31,14 @@ const soraClient = axios.create({
  * @returns {{ success, taskId, providerStatus, raw }}
  */
 export const submitSoraVideoTask = async (prompt, model = "sora", seconds = 8, size = "720x1280") => {
+  if (!SORA_API_KEY) {
+    if (process.env.NODE_ENV !== "production") {
+      logger.warn("soraAPI.submit: SORA_API_KEY not set, using mock");
+      return mockSubmit(prompt, model, seconds, size);
+    }
+    return { success: false, message: "SORA_API_KEY is not configured" };
+  }
+
   try {
     const payload = {
       api_key: SORA_API_KEY,
