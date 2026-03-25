@@ -1,15 +1,9 @@
-/**
- * OAuth 回调页面
- * Authing 完成登录后会带着 code 参数重定向到此页面。
- * AuthingContext 在初始化时会检测到 isRedirectCallback() 为 true，
- * 自动完成 token 交换并恢复登录态，随后跳转到 /ai。
- */
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuthing } from "../contexts/AuthingContext";
 
 const Callback = () => {
-  const navigate   = useNavigate();
+  const navigate               = useNavigate();
   const { isReady, isSignedIn } = useAuthing();
 
   useEffect(() => {
@@ -19,10 +13,25 @@ const Callback = () => {
   }, [isReady, isSignedIn, navigate]);
 
   return (
-    <div className="flex h-screen items-center justify-center bg-[#0b0f14]">
-      <div className="flex flex-col items-center gap-4 text-slate-400">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <p>正在完成登录，请稍候…</p>
+    <div className="flex h-screen items-center justify-center" style={{ background: "#10141a" }}>
+      <div className="flex flex-col items-center gap-6">
+        {/* VisionAI brand mark */}
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
+          style={{ background: "#b8c3ff" }}>
+          <span className="material-symbols-outlined filled text-xl" style={{ color: "#002388" }}>
+            architecture
+          </span>
+        </div>
+        <div className="text-center">
+          <h1 className="text-xl font-bold mb-1"
+            style={{ color: "#dfe2eb", fontFamily: "Manrope, sans-serif" }}>
+            VisionAI
+          </h1>
+          <p className="text-sm" style={{ color: "#8f9095" }}>Completing authentication…</p>
+        </div>
+        {/* Spinner */}
+        <div className="w-7 h-7 rounded-full border-2 border-t-transparent animate-spin"
+          style={{ borderColor: "#b8c3ff", borderTopColor: "transparent" }} />
       </div>
     </div>
   );
