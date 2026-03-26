@@ -73,12 +73,13 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: "package_key is required" });
     }
 
-    // 幂等检查
+    // 幂等检查：必须同时匹配 user_id，防止跨用户串读
     if (clientRequestId) {
       const [existing] = await sql`
         SELECT order_no, amount_cents, points, bonus_points, total_points, status, payment_method
         FROM point_orders
         WHERE client_request_id = ${clientRequestId}
+          AND user_id = ${userId}
       `;
       if (existing) {
         return res.json({ success: true, data: existing });
@@ -124,11 +125,12 @@ export const confirmOrder = async (req, res) => {
     const { orderNo } = req.params;
     const confirmRequestId = req.headers["x-idempotency-key"];
 
-    // 幂等检查
+    // 幂等检查：必须同时匹配 user_id，防止跨用户串读
     if (confirmRequestId) {
       const [existing] = await sql`
         SELECT order_no, status, total_points FROM point_orders
         WHERE confirm_request_id = ${confirmRequestId}
+          AND user_id = ${userId}
       `;
       if (existing && existing.status === "paid") {
         const account = await getAccountInfo(userId);

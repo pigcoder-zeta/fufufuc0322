@@ -150,12 +150,18 @@ CREATE TABLE IF NOT EXISTS point_orders (
   confirmed_at       TIMESTAMPTZ
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_point_orders_client_request_id
-  ON point_orders (client_request_id)
+-- 幂等键索引必须按 (user_id, xxx_request_id) 复合唯一，
+-- 禁止全局唯一索引——否则不同用户可以互相命中对方的幂等记录。
+-- 若旧全局索引存在，先删除再重建。
+DROP INDEX IF EXISTS idx_point_orders_client_request_id;
+DROP INDEX IF EXISTS idx_point_orders_confirm_request_id;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_point_orders_user_client_request_id
+  ON point_orders (user_id, client_request_id)
   WHERE client_request_id IS NOT NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_point_orders_confirm_request_id
-  ON point_orders (confirm_request_id)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_point_orders_user_confirm_request_id
+  ON point_orders (user_id, confirm_request_id)
   WHERE confirm_request_id IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_point_orders_payment_txn_id
