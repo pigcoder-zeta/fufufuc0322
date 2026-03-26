@@ -151,32 +151,39 @@ export const generateSceneImage = async (req, res) => {
     // 3. 补发会员月赠
     await checkAndGrantBonus(userId);
 
-    // 4. 创建 creation 记录（pending）
+    // 4+5. 原子事务：创建 creation + 预占积分 + 更新 charge_status
+    // 三步必须同成同败，任何失败都不留孤儿记录
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    const [creation] = await sql`
-      INSERT INTO creations
-        (user_id, provider, model, scene_key, scene_name, type, status, charge_status,
-         points_reserved, points_cost, request_idempotency_key, expires_at, meta_info)
-      VALUES
-        (${userId}, ${template.target_provider}, ${template.default_model},
-         ${scene_key}, ${template.scene_name}, 'image', 'pending', 'none',
-         0, 0, ${idempotencyKey}, ${expiresAt}, ${{}}::jsonb)
-      RETURNING id
-    `;
-    creationId = creation.id;
+    const txResult = await sql.begin(async (tx) => {
+      const [creation] = await tx`
+        INSERT INTO creations
+          (user_id, provider, model, scene_key, scene_name, type, status, charge_status,
+           points_reserved, points_cost, request_idempotency_key, expires_at, meta_info)
+        VALUES
+          (${userId}, ${template.target_provider}, ${template.default_model},
+           ${scene_key}, ${template.scene_name}, 'image', 'pending', 'none',
+           0, 0, ${idempotencyKey}, ${expiresAt}, ${{}}::jsonb)
+        RETURNING id
+      `;
+      const cid = creation.id;
 
-    // 5. 预占积分
-    await reservePoints({
-      userId, amount: pointsCost, creationId,
-      idempotencyKey: `reserve:${idempotencyKey}`,
-      note: `预占：${template.scene_name}`,
+      // 幂等 key 以 creation.id 为锚，格式：reserve:creation:<id>
+      await reservePoints({
+        userId, amount: pointsCost, creationId: cid,
+        idempotencyKey: `reserve:creation:${cid}`,
+        note: `预占：${template.scene_name}`,
+        tx,
+      });
+
+      await tx`
+        UPDATE creations
+        SET charge_status = 'reserved', points_reserved = ${pointsCost}
+        WHERE id = ${cid}
+      `;
+
+      return { creationId: cid };
     });
-
-    await sql`
-      UPDATE creations
-      SET charge_status = 'reserved', points_reserved = ${pointsCost}
-      WHERE id = ${creationId}
-    `;
+    creationId = txResult.creationId;
 
     // 6. 调用图片 Provider
     const finalPrompt = `${template.system_prompt}\n\n${user_prompt}`;
@@ -196,10 +203,10 @@ export const generateSceneImage = async (req, res) => {
 
     const generationTimeMs = Date.now() - startTime;
 
-    // 8. 结算积分 + 更新记录
+    // 8. 结算积分 + 更新记录，幂等 key：charge:creation:<id>
     await chargePoints({
       userId, amount: pointsCost, creationId,
-      idempotencyKey: `charge:${idempotencyKey}`,
+      idempotencyKey: `charge:creation:${creationId}`,
       note: `结算：${template.scene_name}`,
     });
 
@@ -236,7 +243,7 @@ export const generateSceneImage = async (req, res) => {
         const reservedAmt = rec?.points_reserved ?? 0;
         await releasePoints({
           userId, amount: reservedAmt, creationId,
-          idempotencyKey: `release:${idempotencyKey}`,
+          idempotencyKey: `release:creation:${creationId}`,
           note: "返还：图片生成失败",
         }).catch(() => {});
 
@@ -316,32 +323,38 @@ export const generateSoraVideo = async (req, res) => {
     // 3. 补发会员月赠
     await checkAndGrantBonus(userId);
 
-    // 4. 建记录 + 预占积分
+    // 4+5. 原子事务：创建 creation + 预占积分 + 更新 charge_status
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const txResult = await sql.begin(async (tx) => {
+      const [creation] = await tx`
+        INSERT INTO creations
+          (user_id, provider, model, scene_key, scene_name, type, status, charge_status,
+           points_reserved, points_cost, request_idempotency_key, expires_at, meta_info)
+        VALUES
+          (${userId}, ${template.target_provider}, ${finalModel},
+           ${scene_key}, ${template.scene_name}, 'video', 'pending', 'none',
+           0, 0, ${idempotencyKey}, ${expiresAt},
+           ${JSON.stringify({ seconds: finalSeconds, size: finalSize })}::jsonb)
+        RETURNING id
+      `;
+      const cid = creation.id;
 
-    const [creation] = await sql`
-      INSERT INTO creations
-        (user_id, provider, model, scene_key, scene_name, type, status, charge_status,
-         points_reserved, points_cost, request_idempotency_key, expires_at, meta_info)
-      VALUES
-        (${userId}, ${template.target_provider}, ${finalModel},
-         ${scene_key}, ${template.scene_name}, 'video', 'pending', 'none',
-         0, 0, ${idempotencyKey}, ${expiresAt},
-         ${JSON.stringify({ seconds: finalSeconds, size: finalSize })}::jsonb)
-      RETURNING id
-    `;
-    creationId = creation.id;
+      // 幂等 key 以 creation.id 为锚，格式：reserve:creation:<id>
+      await reservePoints({
+        userId, amount: pointsCost, creationId: cid,
+        idempotencyKey: `reserve:creation:${cid}`,
+        note: `预占：${template.scene_name}`,
+        tx,
+      });
 
-    await reservePoints({
-      userId, amount: pointsCost, creationId,
-      idempotencyKey: `reserve:${idempotencyKey}`,
-      note: `预占：${template.scene_name}`,
+      await tx`
+        UPDATE creations SET charge_status = 'reserved', points_reserved = ${pointsCost}
+        WHERE id = ${cid}
+      `;
+
+      return { creationId: cid };
     });
-
-    await sql`
-      UPDATE creations SET charge_status = 'reserved', points_reserved = ${pointsCost}
-      WHERE id = ${creationId}
-    `;
+    creationId = txResult.creationId;
 
     // 5. 提交 Sora 任务
     const finalPrompt = `${template.system_prompt}\n\n${user_prompt}`;
@@ -375,7 +388,7 @@ export const generateSoraVideo = async (req, res) => {
       const reservedAmt = rec?.points_reserved ?? 0;
       await releasePoints({
         userId, amount: reservedAmt, creationId,
-        idempotencyKey: `release:${idempotencyKey}`,
+        idempotencyKey: `release:creation:${creationId}`,
         note: "返还：视频任务提交失败",
       }).catch(() => {});
 
@@ -468,7 +481,7 @@ export const checkVideoStatus = async (req, res) => {
       // 结算积分
       await chargePoints({
         userId, amount: creation.points_reserved, creationId: creation.id,
-        idempotencyKey: `charge:video:${creation.id}`,
+        idempotencyKey: `charge:creation:${creation.id}`,
         note: `结算：${creation.scene_name}`,
       }).catch((e) => logger.error("checkVideoStatus.charge.error", { error: e.message }));
 
@@ -495,7 +508,7 @@ export const checkVideoStatus = async (req, res) => {
     if (internalStatus === "failed") {
       await releasePoints({
         userId, amount: creation.points_reserved, creationId: creation.id,
-        idempotencyKey: `release:video:${creation.id}`,
+        idempotencyKey: `release:creation:${creation.id}`,
         note: "返还：视频生成失败",
       }).catch(() => {});
 

@@ -47,8 +47,10 @@ export const getBalance = async (req, res) => {
 // ─────────────────────────────────────────────
 export const getPackages = async (req, res) => {
   try {
+    // spec 要求字段：total_points = points + bonus_points, is_active
     const packages = await sql`
-      SELECT id, package_key, package_name, price_cents, points, bonus_points
+      SELECT id, package_key, package_name, price_cents, points, bonus_points,
+             (points + bonus_points) AS total_points, is_active
       FROM point_packages
       WHERE is_active = true
       ORDER BY price_cents ASC
@@ -69,6 +71,9 @@ export const createOrder = async (req, res) => {
     const { package_key } = req.body;
     const clientRequestId = req.headers["x-idempotency-key"];
 
+    if (!clientRequestId) {
+      return res.status(400).json({ success: false, message: "X-Idempotency-Key header is required" });
+    }
     if (!package_key) {
       return res.status(400).json({ success: false, message: "package_key is required" });
     }
@@ -124,6 +129,10 @@ export const confirmOrder = async (req, res) => {
     const { userId } = req.auth;
     const { orderNo } = req.params;
     const confirmRequestId = req.headers["x-idempotency-key"];
+
+    if (!confirmRequestId) {
+      return res.status(400).json({ success: false, message: "X-Idempotency-Key header is required" });
+    }
 
     // 幂等检查：必须同时匹配 user_id，防止跨用户串读
     if (confirmRequestId) {
@@ -238,9 +247,17 @@ export const getLedger = async (req, res) => {
     const entry_type = req.query.entry_type || null;
     const offset = (page - 1) * page_size;
 
-    const ledger = await sql`
+    // spec 要求：items + total 分页结构；包含 metadata 字段
+    const [{ count }] = await sql`
+      SELECT COUNT(*)::int AS count
+      FROM point_ledger
+      WHERE user_id = ${userId}
+        AND (${entry_type}::text IS NULL OR entry_type = ${entry_type})
+    `;
+
+    const items = await sql`
       SELECT id, entry_type, source_type, source_id, change_points,
-             held_points_change, balance_after, held_after, note, created_at
+             held_points_change, balance_after, held_after, note, metadata, created_at
       FROM point_ledger
       WHERE user_id = ${userId}
         AND (${entry_type}::text IS NULL OR entry_type = ${entry_type})
@@ -248,7 +265,8 @@ export const getLedger = async (req, res) => {
       LIMIT ${page_size} OFFSET ${offset}
     `;
 
-    res.json({ success: true, data: ledger, page, page_size });
+    // spec 响应结构：{ success, data: { items, page, page_size, total } }
+    res.json({ success: true, data: { items, page, page_size, total: count } });
   } catch (err) {
     logger.error("getLedger.error", { error: err.message });
     res.status(500).json({ success: false, message: err.message });

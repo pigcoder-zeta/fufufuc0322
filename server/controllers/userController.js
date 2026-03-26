@@ -94,8 +94,12 @@ export const downloadSingle = async (req, res) => {
 export const batchDownload = async (req, res) => {
   try {
     const { userId } = req.auth;
+    const idempotencyKey = req.headers["x-idempotency-key"];
     const { creation_ids } = req.body;
 
+    if (!idempotencyKey) {
+      return res.status(400).json({ success: false, message: "X-Idempotency-Key header is required" });
+    }
     if (!creation_ids || !Array.isArray(creation_ids) || creation_ids.length === 0) {
       return res.status(400).json({ success: false, message: "creation_ids must be a non-empty array" });
     }

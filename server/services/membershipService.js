@@ -76,7 +76,7 @@ export const tryGrantBonusInTx = async (tx, account) => {
   // ledger 用独立幂等键，格式：membership_grant:bonus:<grant.id>
   const ledgerIdempotencyKey = `membership_grant:bonus:${grant.id}`;
 
-  // 发放积分
+  // 发放积分，entry_type 对齐 spec: membership_grant
   const { ledger } = await rechargePoints({
     userId,
     amount: bonusPoints,
@@ -84,6 +84,7 @@ export const tryGrantBonusInTx = async (tx, account) => {
     sourceId: String(grant.id),
     idempotencyKey: ledgerIdempotencyKey,
     note: `会员月赠积分 ${membership_tier} ${cycleStart.toISOString().slice(0, 7)}`,
+    entryType: "membership_grant",
     tx,
   });
 

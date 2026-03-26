@@ -1,7 +1,9 @@
 /**
  * 数据库连接 — postgres（porsager）
- * 兼容阿里云 ApsaraDB RDS for PostgreSQL，使用标准 TCP 连接池。
- * API 与 @neondatabase/serverless 的模板字面量接口基本一致，事务写法相同。
+ *
+ * 生产基线：PostgreSQL 16（spec-v1 决策 5A 完全冻结，不允许使用旧版本）。
+ * 云厂商不绑定：可使用阿里云 ApsaraDB RDS for PostgreSQL 16 或其他支持 PG16 的托管/自建实例。
+ * 使用标准 TCP 连接池，API 与 @neondatabase/serverless 模板字面量接口兼容，事务写法相同。
  */
 import postgres from "postgres";
 import logger from "./logger.js";

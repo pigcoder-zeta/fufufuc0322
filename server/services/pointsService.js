@@ -47,9 +47,10 @@ const checkLedgerIdempotency = async (tx, idempotencyKey) => {
 
 // ─────────────────────────────────────────────
 // reservePoints — 预占积分
+// 支持外部事务 tx，供 aiController 原子封装使用
 // ─────────────────────────────────────────────
-export const reservePoints = async ({ userId, amount, creationId, idempotencyKey, note }) => {
-  return sql.begin(async (tx) => {
+export const reservePoints = async ({ userId, amount, creationId, idempotencyKey, note, tx: externalTx }) => {
+  const run = async (tx) => {
     // 1. 锁定账户
     const account = await ensureAccountTx(tx, userId);
 
@@ -72,7 +73,7 @@ export const reservePoints = async ({ userId, amount, creationId, idempotencyKey
 
     const newHeld = account.held_points + amount;
 
-    // 4. 先写流水（idempotency_key 唯一，若并发重入此处会报唯一冲突）
+    // 4. 先写流水
     const [ledger] = await tx`
       INSERT INTO point_ledger
         (user_id, entry_type, source_type, source_id, idempotency_key,
@@ -83,7 +84,7 @@ export const reservePoints = async ({ userId, amount, creationId, idempotencyKey
       RETURNING *
     `;
 
-    // 5. 再改账户（流水写成功才到这里）
+    // 5. 再改账户
     await tx`
       UPDATE user_point_accounts
       SET held_points = ${newHeld}, version = version + 1, updated_at = NOW()
@@ -92,7 +93,9 @@ export const reservePoints = async ({ userId, amount, creationId, idempotencyKey
 
     logger.info("points.reserve", { userId, amount, creationId, ledgerId: ledger.id });
     return { success: true, ledger };
-  });
+  };
+
+  return externalTx ? run(externalTx) : sql.begin(run);
 };
 
 // ─────────────────────────────────────────────
@@ -180,10 +183,12 @@ export const releasePoints = async ({ userId, amount, creationId, idempotencyKey
 };
 
 // ─────────────────────────────────────────────
-// rechargePoints — 充值发放
+// rechargePoints — 充值 / 月赠 / 手工调账（统一入账方法）
+// entryType 可选，默认 'recharge'；月赠传 'membership_grant'；手工调账传 'manual_adjustment'
 // ─────────────────────────────────────────────
 export const rechargePoints = async ({
   userId, amount, sourceType, sourceId, idempotencyKey, note, tx: externalTx,
+  entryType = "recharge",
 }) => {
   const run = async (tx) => {
     const account = await ensureAccountTx(tx, userId);
@@ -201,7 +206,7 @@ export const rechargePoints = async ({
         (user_id, entry_type, source_type, source_id, idempotency_key,
          change_points, held_points_change, balance_after, held_after, note)
       VALUES
-        (${userId}, 'recharge', ${sourceType}, ${String(sourceId)}, ${idempotencyKey},
+        (${userId}, ${entryType}, ${sourceType}, ${String(sourceId)}, ${idempotencyKey},
          ${amount}, 0, ${newBalance}, ${account.held_points}, ${note || null})
       RETURNING *
     `;
@@ -212,7 +217,7 @@ export const rechargePoints = async ({
       WHERE user_id = ${userId}
     `;
 
-    logger.info("points.recharge", { userId, amount, sourceId, ledgerId: ledger.id });
+    logger.info("points.recharge", { userId, amount, entryType, sourceId, ledgerId: ledger.id });
     return { success: true, ledger, newBalance };
   };
 

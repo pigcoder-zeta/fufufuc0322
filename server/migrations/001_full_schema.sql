@@ -284,12 +284,12 @@ VALUES
   ('image', 'nano_banana2', 'ecommerce_product_image', NULL, NULL, NULL, 100, 10),
   -- 图片：默认兜底
   ('image', 'nano_banana2', NULL, NULL, NULL, NULL, 100, 100),
-  -- 视频：按场景命中（8秒）
-  ('video', 'openai_sora', 'ecommerce_promo_video', 'sora', 8, '720x1280', 500, 10),
+  -- 视频：按场景命中（8秒）— provider 必须与 prompt_templates.target_provider 一致
+  ('video', 'sora2', 'ecommerce_promo_video', 'sora', 8, '720x1280', 500, 10),
   -- 视频：按时长兜底（5秒）
-  ('video', 'openai_sora', NULL, NULL, 5, NULL, 300, 50),
+  ('video', 'sora2', NULL, NULL, 5, NULL, 300, 50),
   -- 视频：按时长兜底（10秒）
-  ('video', 'openai_sora', NULL, NULL, 10, NULL, 600, 50),
+  ('video', 'sora2', NULL, NULL, 10, NULL, 600, 50),
   -- 视频：默认兜底
-  ('video', 'openai_sora', NULL, NULL, NULL, NULL, 500, 100)
+  ('video', 'sora2', NULL, NULL, NULL, NULL, 500, 100)
 ON CONFLICT DO NOTHING;
