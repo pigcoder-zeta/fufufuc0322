@@ -111,25 +111,7 @@ export const generateSceneImage = async (req, res) => {
   const startTime = Date.now();
 
   try {
-    // 0. 幂等检查
-    const [existing] = await sql`
-      SELECT id, status, content, thumbnail_url, points_cost, expires_at
-      FROM creations
-      WHERE user_id = ${userId} AND request_idempotency_key = ${idempotencyKey}
-    `;
-    if (existing) {
-      return res.json({
-        success: true,
-        creation_id: existing.id,
-        status: existing.status,
-        content: existing.content,
-        thumbnail_url: existing.thumbnail_url,
-        points_charged: existing.points_cost,
-        expires_at: existing.expires_at,
-      });
-    }
-
-    // 1. 读取场景模板
+    // 1. 读取场景模板（幂等读，无需入事务）
     const [template] = await sql`
       SELECT * FROM prompt_templates
       WHERE scene_key = ${scene_key} AND is_active = true
@@ -148,11 +130,12 @@ export const generateSceneImage = async (req, res) => {
       size: finalSize,
     });
 
-    // 3. 补发会员月赠
+    // 3. 补发会员月赠（补偿操作，有自身幂等保障，不必入核心事务）
     await checkAndGrantBonus(userId);
 
-    // 4+5. 原子事务：创建 creation + 预占积分 + 更新 charge_status
-    // 三步必须同成同败，任何失败都不留孤儿记录
+    // 4. 原子事务：create-or-reuse + reserve + 更新 charge_status
+    // 通过 INSERT … ON CONFLICT DO NOTHING 将幂等查找纳入同一事务，消除并发窗口。
+    // DB 唯一索引：idx_creations_user_idempotency_key (user_id, request_idempotency_key)
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const txResult = await sql.begin(async (tx) => {
       const [creation] = await tx`
@@ -163,11 +146,24 @@ export const generateSceneImage = async (req, res) => {
           (${userId}, ${template.target_provider}, ${template.default_model},
            ${scene_key}, ${template.scene_name}, 'image', 'pending', 'none',
            0, 0, ${idempotencyKey}, ${expiresAt}, ${{}}::jsonb)
+        ON CONFLICT (user_id, request_idempotency_key) DO NOTHING
         RETURNING id
       `;
+
+      if (!creation) {
+        // 幂等重放：并发请求已完成插入，拿已有记录并锁行防读中间态
+        const [existing] = await tx`
+          SELECT id, status, content, thumbnail_url, points_cost, expires_at
+          FROM creations
+          WHERE user_id = ${userId} AND request_idempotency_key = ${idempotencyKey}
+          FOR UPDATE
+        `;
+        return { isExisting: true, existing };
+      }
+
       const cid = creation.id;
 
-      // 幂等 key 以 creation.id 为锚，格式：reserve:creation:<id>
+      // reserve 与 INSERT 同事务，幂等 key 以 creation.id 为锚
       await reservePoints({
         userId, amount: pointsCost, creationId: cid,
         idempotencyKey: `reserve:creation:${cid}`,
@@ -181,8 +177,23 @@ export const generateSceneImage = async (req, res) => {
         WHERE id = ${cid}
       `;
 
-      return { creationId: cid };
+      return { isExisting: false, creationId: cid };
     });
+
+    // 幂等重放：直接返回已有记录快照
+    if (txResult.isExisting) {
+      const ex = txResult.existing;
+      return res.json({
+        success: true,
+        creation_id: ex.id,
+        status: ex.status,
+        content: ex.content,
+        thumbnail_url: ex.thumbnail_url,
+        points_charged: ex.points_cost,
+        expires_at: ex.expires_at,
+      });
+    }
+
     creationId = txResult.creationId;
 
     // 6. 调用图片 Provider
@@ -288,21 +299,7 @@ export const generateSoraVideo = async (req, res) => {
   let creationId = null;
 
   try {
-    // 0. 幂等检查
-    const [existing] = await sql`
-      SELECT id, status, task_id, points_reserved, points_cost, expires_at
-      FROM creations
-      WHERE user_id = ${userId} AND request_idempotency_key = ${idempotencyKey}
-    `;
-    if (existing) {
-      return res.json({
-        success: true, creation_id: existing.id, status: existing.status,
-        task_id: existing.task_id, points_reserved: existing.points_reserved,
-        expires_at: existing.expires_at, message: "Task already submitted.",
-      });
-    }
-
-    // 1. 读取场景模板
+    // 1. 读取场景模板（幂等读，无需入事务）
     const [template] = await sql`
       SELECT * FROM prompt_templates WHERE scene_key = ${scene_key} AND is_active = true
     `;
@@ -320,10 +317,11 @@ export const generateSoraVideo = async (req, res) => {
       sceneKey: scene_key, model: finalModel, seconds: finalSeconds, size: finalSize,
     });
 
-    // 3. 补发会员月赠
+    // 3. 补发会员月赠（补偿操作，有自身幂等保障，不必入核心事务）
     await checkAndGrantBonus(userId);
 
-    // 4+5. 原子事务：创建 creation + 预占积分 + 更新 charge_status
+    // 4. 原子事务：create-or-reuse + reserve + 更新 charge_status
+    // INSERT … ON CONFLICT DO NOTHING 将幂等查找纳入同一事务，消除并发窗口。
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const txResult = await sql.begin(async (tx) => {
       const [creation] = await tx`
@@ -335,11 +333,24 @@ export const generateSoraVideo = async (req, res) => {
            ${scene_key}, ${template.scene_name}, 'video', 'pending', 'none',
            0, 0, ${idempotencyKey}, ${expiresAt},
            ${JSON.stringify({ seconds: finalSeconds, size: finalSize })}::jsonb)
+        ON CONFLICT (user_id, request_idempotency_key) DO NOTHING
         RETURNING id
       `;
+
+      if (!creation) {
+        // 幂等重放：并发请求已完成插入，拿已有记录并锁行防读中间态
+        const [existing] = await tx`
+          SELECT id, status, task_id, points_reserved, expires_at
+          FROM creations
+          WHERE user_id = ${userId} AND request_idempotency_key = ${idempotencyKey}
+          FOR UPDATE
+        `;
+        return { isExisting: true, existing };
+      }
+
       const cid = creation.id;
 
-      // 幂等 key 以 creation.id 为锚，格式：reserve:creation:<id>
+      // reserve 与 INSERT 同事务，幂等 key 以 creation.id 为锚
       await reservePoints({
         userId, amount: pointsCost, creationId: cid,
         idempotencyKey: `reserve:creation:${cid}`,
@@ -352,8 +363,19 @@ export const generateSoraVideo = async (req, res) => {
         WHERE id = ${cid}
       `;
 
-      return { creationId: cid };
+      return { isExisting: false, creationId: cid };
     });
+
+    // 幂等重放：直接返回已有记录快照
+    if (txResult.isExisting) {
+      const ex = txResult.existing;
+      return res.json({
+        success: true, creation_id: ex.id, status: ex.status,
+        task_id: ex.task_id, points_reserved: ex.points_reserved,
+        expires_at: ex.expires_at, message: "Task already submitted.",
+      });
+    }
+
     creationId = txResult.creationId;
 
     // 5. 提交 Sora 任务

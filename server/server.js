@@ -115,7 +115,7 @@ cron.schedule("*/30 * * * *", async () => {
         const { releasePoints } = await import("./services/pointsService.js");
         await releasePoints({
           userId: task.user_id, amount: task.points_reserved, creationId: task.id,
-          idempotencyKey: `release:timeout:${task.id}`,
+          idempotencyKey: `release:creation:${task.id}`,
           note: "返还：视频任务超时",
         });
         await sql`
